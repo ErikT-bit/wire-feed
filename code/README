@@ -1,0 +1,400 @@
+# Wire EDM Brake Controller
+
+## Overview
+
+This system controls the electronic wire brake for the Wire EDM machine.
+
+The Raspberry Pi 5 is the main machine computer. It runs LinuxCNC, talks to the Mesa motion controller, and provides the operator interface.
+
+The Raspberry Pi 3B+ is a dedicated brake controller. It runs the brake control program as a background service and talks to the moteus r4.11 through the pi3hat.
+
+The operator does not directly control the RP3 during normal machine use. The operator uses the RP5 screen and keyboard, and the RP5 relays text to and from the RP3 brake controller.
+
+## Hardware Architecture
+
+```text
+Operator
+  |
+  | keyboard / screen
+  v
+Raspberry Pi 5
+LinuxCNC + Mesa + brake_console.py
+  |
+  | USB-to-TTL UART
+  v
+Raspberry Pi 3B+
+wire_brake.py service
+  |
+  | pi3hat r4.5, CAN bus 1 / JC1
+  v
+moteus r4.11
+electric brake motor
+````
+
+## Program Roles
+
+### Raspberry Pi 5: `brake_console.py`
+
+`brake_console.py` is the operator-facing terminal program.
+
+It does not calculate Kd, validate input, control the moteus, or contain the brake state machine.
+
+Its job is only to:
+
+* find the USB-to-TTL serial adapter
+* open the serial port
+* display text received from the RP3
+* send operator keyboard input back to the RP3
+* send `?` when it starts so the RP3 reprints the current prompt
+* send `stop` when the console is closed or interrupted
+
+The RP5 is still the main Wire EDM machine computer, but for this brake program it mainly acts as the operator terminal.
+
+### Raspberry Pi 3B+: `wire_brake.py`
+
+`wire_brake.py` is the actual brake controller.
+
+It owns:
+
+* the operator prompts
+* input validation
+* Kd calculation
+* moteus communication
+* brake engagement
+* brake stopping
+* fault checking
+* resume behavior
+* automatic recovery after serial or moteus errors
+
+The RP3 should normally run `wire_brake.py` automatically as a service.
+
+## Normal Machine Startup
+
+1. Power on the Wire EDM machine.
+2. The RP3 boots.
+3. The RP3 starts `wire_brake.py`.
+4. The RP3 tries to open its serial connection.
+5. The RP3 tries to connect to the moteus on pi3hat CAN bus 1 / JC1.
+6. The RP5 boots into the machine interface.
+7. The RP5 launches `brake_console.py`.
+8. The console sends `?` to the RP3 so the current brake prompt is displayed.
+9. The operator follows the prompts shown on the RP5.
+
+## Operator Workflow
+
+The operator sees a simple text prompt on the RP5.
+
+The RP3 first asks:
+
+```text
+What velocity do you want the wire to be pulled at (m/min)?
+Pick a value between 5.0-15.0:
+```
+
+The operator enters the desired wire speed in meters per minute.
+
+Then the RP3 asks:
+
+```text
+What tension do you want the wire to be held at (kgf)?
+Pick a value between 0.2-3.0:
+```
+
+The operator enters the desired wire tension in kgf.
+
+The RP3 then calculates the Kd value and engages the brake.
+
+The operator sees:
+
+```text
+Brake engaged.  Kd = X.XXXX  (v=... m/min, T=... kgf)
+Type 'stop' to disengage when finished.
+```
+
+When the brake should be released, the operator types:
+
+```text
+stop
+```
+
+The RP3 stops the moteus brake and then asks:
+
+```text
+Resume with previous values (v=..., T=..., Kd=...)? (y/n):
+```
+
+If the operator types:
+
+```text
+y
+```
+
+the brake re-engages using the same previous velocity, tension, and Kd.
+
+If the operator types:
+
+```text
+n
+```
+
+the program goes back to the beginning and asks for a new velocity and tension.
+
+## Brake State Flow
+
+The RP3 brake controller follows this operator-driven flow:
+
+```text
+ASK_VELOCITY
+   |
+   v
+ASK_TENSION
+   |
+   v
+CALCULATE_KD
+   |
+   v
+ENGAGE_BRAKE
+   |
+   v
+WAIT_FOR_STOP_OR_FAULT
+   |
+   v
+STOP_BRAKE
+   |
+   v
+ASK_RESUME
+   |          |
+   | yes      | no
+   v          v
+ENGAGE     ASK_VELOCITY
+```
+
+## Kd Calculation
+
+The RP3 calculates the moteus damping value using:
+
+```text
+Kd = 0.560 - 0.218v + 2.246T - 0.107vT + 0.0126v^2 - 0.122T^2
+```
+
+Where:
+
+```text
+v = wire velocity in m/min
+T = target wire tension in kgf
+```
+
+The accepted input ranges are:
+
+```text
+velocity: 5.0 to 15.0 m/min
+tension:  0.2 to 3.0 kgf
+```
+
+If the operator enters a value outside those ranges, the RP3 rejects it and asks again.
+
+If the input cannot be converted to a number, the RP3 rejects it and asks again.
+
+## How the Brake Is Applied
+
+The moteus is used as a damping brake.
+
+The RP3 commands the moteus with:
+
+```text
+position = NaN
+velocity = 0
+kp_scale = 0
+kd_scale = calculated Kd
+maximum_torque = 5.0 Nm
+```
+
+This makes the moteus resist motion instead of commanding a position.
+
+While the brake is engaged, the RP3 reissues the brake command every 50 ms. This keeps the moteus watchdog alive and maintains the braking behavior.
+
+## Fault Monitoring
+
+While the brake is engaged, the RP3 periodically queries the moteus for fault status.
+
+The code checks the moteus fault register every 20 control cycles. Since the control period is 50 ms, this is about once per second.
+
+If a moteus fault is detected, the RP3 stops the brake and prints a message like:
+
+```text
+Brake stopped — moteus fault code X.
+```
+
+Then it asks whether the operator wants to resume with the previous values.
+
+## Operator Input During Braking
+
+While the brake is engaged:
+
+* `stop` disengages the brake
+* `?` reprints the reminder
+* blank input reprints the reminder
+* any other text is ignored
+
+Example:
+
+```text
+Brake is engaged. Type 'stop' to disengage.
+```
+
+## Serial Port Behavior
+
+### RP5 Console Port Detection
+
+On the RP5, `brake_console.py` checks for serial ports in this order:
+
+```text
+/dev/ttyUSB0
+/dev/ttyUSB1
+/dev/ttyACM0
+/dev/ttyACM1
+/dev/serial0
+```
+
+It uses the first one it finds.
+
+Default baud rate:
+
+```text
+115200
+```
+
+Manual launch examples on the RP5:
+
+```bash
+python3 brake_console.py
+```
+
+Force a specific port:
+
+```bash
+python3 brake_console.py /dev/ttyUSB0
+```
+
+Force port and baud:
+
+```bash
+python3 brake_console.py /dev/ttyUSB1 115200
+```
+
+### RP3 Brake Controller Port Detection
+
+On the RP3, `wire_brake.py` checks for serial ports in this order:
+
+```text
+/dev/serial0
+/dev/ttyUSB0
+/dev/ttyUSB1
+/dev/ttyAMA0
+/dev/ttyS0
+```
+
+This means the RP3 prefers its hardware UART first, which makes sense if the USB-to-TTL adapter is wired into the pi3hat UT port or directly to the Pi GPIO UART.
+
+Default baud rate:
+
+```text
+115200
+```
+
+## Manual Commands
+
+### Run the RP3 brake controller manually
+
+Normally this should be handled by the service, but for testing:
+
+```bash
+sudo /home/admin/moteus/venv/bin/python /home/admin/wirebrake/wire_brake.py
+```
+
+Force a port:
+
+```bash
+sudo /home/admin/moteus/venv/bin/python /home/admin/wirebrake/wire_brake.py --port /dev/serial0 --baud 115200
+```
+
+### Run the RP3 brake controller in bench mode
+
+Bench mode skips UART and talks directly through the terminal:
+
+```bash
+sudo /home/admin/moteus/venv/bin/python /home/admin/wirebrake/wire_brake.py --sim
+```
+
+### Run the RP5 console manually
+
+```bash
+python3 brake_console.py
+```
+
+or:
+
+```bash
+python3 brake_console.py /dev/ttyUSB0
+```
+
+## Recovery Behavior
+
+`wire_brake.py` is designed to keep running.
+
+If there is a major error, such as:
+
+* serial port unavailable
+* serial disconnect
+* moteus not powered
+* pi3hat communication failure
+* moteus communication error
+
+the RP3 will:
+
+1. try to stop the brake safely
+2. close the serial channel if needed
+3. print/log the error
+4. wait 2 seconds
+5. retry initialization
+
+This makes the RP3 behave like a persistent brake subsystem rather than a one-shot script.
+
+## Closing the RP5 Console
+
+If the operator closes the RP5 console or presses Ctrl-C, `brake_console.py` attempts to send:
+
+```text
+stop
+```
+
+to the RP3 before closing.
+
+This is intended to politely disengage the brake if the console is closed during operation.
+
+## Important Operator Notes
+
+* The RP5 is the main machine interface.
+* The RP3 is the brake controller.
+* The operator should normally only interact with the RP5.
+* The RP3 owns all prompts and brake behavior.
+* The operator does not need to know serial commands.
+* To release the brake, type `stop`.
+* To repeat the same brake setup after stopping, answer `y`.
+* To enter new speed and tension values, answer `n`.
+
+## Safety Notes
+
+The brake controller is designed to fail safe where possible:
+
+* the moteus is stopped during initialization
+* invalid velocity and tension values are rejected
+* the brake command is refreshed continuously while engaged
+* moteus faults are checked during braking
+* closing the console sends `stop`
+* major errors trigger a safe stop and retry loop
+
+The brake will not engage until the operator enters valid velocity and tension values.
+
+```
+```
