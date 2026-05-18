@@ -1,0 +1,33 @@
+[Unit]
+Description=Wire EDM Brake Controller (Pi 3B+ + pi3hat r4.5 + moteus r4.11)
+Documentation=file:///home/admin/wirebrake/wire_brake.py
+# We do not need the network for the UART link, but waiting for the basic
+# system to come up first is polite.
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=simple
+# Run as root: the pi3hat library needs CAP_SYS_NICE to set its realtime
+# scheduler.  If you ran `setcap cap_sys_nice+ep` on the venv python, you
+# can switch User=admin and Group=admin instead.
+User=root
+Group=root
+
+WorkingDirectory=/home/admin/wirebrake
+ExecStart=/home/admin/moteus/venv/bin/python /home/admin/wirebrake/wire_brake.py
+
+# The program itself loops on errors, but if it ever does crash, restart it.
+Restart=always
+RestartSec=5
+
+# Send stdout/stderr to the systemd journal -- view with `journalctl -u wire-brake`.
+StandardOutput=journal
+StandardError=journal
+
+# Give the moteus a clean stop on shutdown / service restart.
+KillSignal=SIGINT
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

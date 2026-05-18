@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Wire EDM Brake Console
+Comment=Auto-opens a terminal that talks to the brake controller on the Pi 3B+ over TCP.
+# Adjust the path to brake_console.py if your install location differs.
+# 'echo Press Enter ...; read' keeps the terminal open after the script
+# exits so the operator can read any final message.
+Exec=bash -lc "xterm -title 'Wire EDM Brake Console' -fa 'Monospace' -fs 14 -geometry 90x30 -e 'python3 /home/admin/wirebrake/brake_console.py 10.10.10.20 5005; echo; echo Press Enter to close.; read'"
+Icon=utilities-terminal
+Terminal=false
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+Categories=Utility;
