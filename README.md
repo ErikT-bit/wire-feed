@@ -64,7 +64,7 @@ See [`mechanical/README.md`](mechanical/README.md) for the detailed CAD-file inv
 
 Calibration data and the tuning workflow used during development are kept in a separate repository:
 
-[WIRE_EDM_WIRE_TENSION_TEST](https://github.com/ErikT-bit/WIRE_EDM_WIRE_TENSION_TEST)
+[Wire-EDM-Tension-Calibration](https://github.com/ErikT-bit/Wire-EDM-Tension-Calibration)
 
 The `data/` folder is not part of this repository layout for the GitHub push.
 
