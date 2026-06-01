@@ -354,3 +354,18 @@ ssh admin@10.10.10.20 sudo systemctl status wire-brake
 ## License
 
 TBD — pick one and add a LICENSE file if you intend to publish.
+
+## Authorship and development credit
+
+The Raspberry Pi brake-controller software and supporting configuration files in this directory were created by **Nathan Taylor** with development assistance from **Claude Code**.
+
+Files authored and assembled for this brake-controller system:
+
+- `brake_console.py`
+- `detect_moteus.py`
+- `fake_brake_server.py`
+- `wire_brake.py`
+- `brake-console.desktop`
+- `wire-brake.service`
+
+This `README.md` documentation was also prepared for the brake-controller system by **Nathan Taylor** with assistance from **Claude Code**.
